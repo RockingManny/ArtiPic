@@ -1,179 +1,235 @@
-# Python code to convert an image to ASCII image.
 import numpy as np
 from PIL import Image
 import streamlit as st
- 
-# gray scale level values from: 
-# http://paulbourke.net/dataformats/asciiart/
- 
-# 70 levels of gray
-gscale1 = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\|()1[]?-_+~i!lI;:,^`'. "
+import matplotlib.pyplot as plt
+from scipy import fftpack
 
-# 10 levels of gray
-gscale2 = '@%#*+=-:. '
+# Gray scale level values
+gscale1 = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1[]?-_+~i!lI;:,^`'. "
+gscale2 = '@#*+=-:,.  '
+custom_scales = {
+    'Original 70-level': gscale1,
+    'Original 10-level': gscale2,
+    'Dark Scale 1': '@%#*+=-:,. ',
+    'Dark Scale 2': '@#*+=-:,.  ',
+    'Dark Scale 3': '@#$%*+=:,. ',
+    'Dark Scale 4': '@#%*+=-:;  ',
+    'Dark Scale 5': '@#*+=-:;,. '
+}
 
-# calculates the average index of a pixel: used to select appropriate gscale ascii character
 def getAverageL(image):
- 
-    """
-    Given PIL Image, return average value of grayscale value
-    """
-
-    # get image as numpy array
     im = np.array(image)
+    w, h = im.shape
+    return np.average(im.reshape(w * h))
 
-    # get shape
-    w,h = im.shape
+# Filter functions
+def mean_filter(image, kernel_size=3):
+    pad = kernel_size // 2
+    padded_img = np.pad(image, pad, mode='edge')
+    filtered_img = np.zeros_like(image)
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            filtered_img[i, j] = np.mean(padded_img[i:i+kernel_size, j:j+kernel_size])
+    return filtered_img.astype(np.uint8)
 
-    # get average
-    return np.average(im.reshape(w*h))
+def min_filter(image, kernel_size=3):
+    pad = kernel_size // 2
+    padded_img = np.pad(image, pad, mode='edge')
+    filtered_img = np.zeros_like(image)
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            filtered_img[i, j] = np.min(padded_img[i:i+kernel_size, j:j+kernel_size])
+    return filtered_img.astype(np.uint8)
 
-# Convert img to ASCII art: returns list of rows containing ascii art
-def covertImageToAscii(fileName, cols, scale, moreLevels):
-    
-    """
-    Given Image and dims (rows, cols) returns an m*n list of Images 
-    """
+def max_filter(image, kernel_size=3):
+    pad = kernel_size // 2
+    padded_img = np.pad(image, pad, mode='edge')
+    filtered_img = np.zeros_like(image)
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            filtered_img[i, j] = np.max(padded_img[i:i+kernel_size, j:j+kernel_size])
+    return filtered_img.astype(np.uint8)
 
-    # declare globals
-    global gscale1, gscale2
- 
-    # open image and convert to grayscale
-    image = Image.open(fileName).convert('L')
-    
-    # Inverts image to negative
-    img_array = np.array(image)
-    img_array_inverted = 255 - img_array
-    image = Image.fromarray(img_array_inverted)
+def sobel_filter(image):
+    Kx = np.array([[1, 0, -1], [2, 0, -2], [1, 0, -1]])
+    Ky = np.array([[1, 2, 1], [0, 0, 0], [-1, -2, -1]])
+    Ix = np.zeros_like(image, dtype=float)
+    Iy = np.zeros_like(image, dtype=float)
+    pad = 1
+    padded_img = np.pad(image, pad, mode='edge')
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            region = padded_img[i:i+3, j:j+3]
+            Ix[i, j] = np.sum(Kx * region)
+            Iy[i, j] = np.sum(Ky * region)
+    G = np.hypot(Ix, Iy)
+    G = (G / G.max()) * 255
+    return G.astype(np.uint8)
 
+def gaussian_filter(image, kernel_size=5, sigma=1.0):
+    ax = np.linspace(-(kernel_size // 2), kernel_size // 2, kernel_size)
+    xx, yy = np.meshgrid(ax, ax)
+    kernel = np.exp(-(xx**2 + yy**2) / (2. * sigma**2))
+    kernel = kernel / np.sum(kernel)
+    pad = kernel_size // 2
+    padded_img = np.pad(image, pad, mode='edge')
+    filtered_img = np.zeros_like(image, dtype=float)
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            region = padded_img[i:i+kernel_size, j:j+kernel_size]
+            filtered_img[i, j] = np.sum(region * kernel)
+    filtered_img = np.clip(filtered_img, 0, 255)
+    return filtered_img.astype(np.uint8)
 
-    # store dimensions
+def butterworth_filter(image, cutoff=30, order=2):
+    f = fftpack.fft2(image)
+    fshift = fftpack.fftshift(f)
+    rows, cols = image.shape
+    crow, ccol = rows // 2, cols // 2
+    u = np.arange(rows)
+    v = np.arange(cols)
+    V, U = np.meshgrid(v, u)
+    D = np.sqrt((U - crow)**2 + (V - ccol)**2)
+    H = 1 / (1 + (D / cutoff)**(2 * order))
+    fshift_filtered = fshift * H
+    f_ishift = fftpack.ifftshift(fshift_filtered)
+    img_back = fftpack.ifft2(f_ishift)
+    img_back = np.abs(img_back)
+    img_back = (img_back / img_back.max()) * 255
+    return img_back.astype(np.uint8)
+
+# Dictionary of filters
+filter_functions = {
+    'mean': mean_filter,
+    'min': min_filter,
+    'max': max_filter,
+    'sobel': sobel_filter,
+    'gaussian': gaussian_filter,
+    'butterworth': butterworth_filter
+}
+
+def image_to_ascii(image, cols, scale, selected_scale, custom_scale, invert_scale):
+    gscale = custom_scale if selected_scale == 'Custom' and custom_scale else custom_scales.get(selected_scale, custom_scales['Original 10-level'])
+    if not gscale:
+        st.error("Custom scale cannot be empty. Using default scale.")
+        gscale = custom_scales['Original 10-level']
+    if invert_scale:
+        gscale = gscale[::-1]
     W, H = image.size[0], image.size[1]
-    print("input image dims: %d x %d" % (W, H))
-
-    # compute width of tile
-    w = W/cols
- 
-    # compute tile height based on aspect ratio and scale
-    h = w/scale
-
-    # check if image size is too small
-    if cols > W or int(H/h) > H:
-        print("Image too small for specified cols!")
-        w=W
-        h=H
-
-    # compute number of rows
-    rows = int(H/h)
-    print("cols: %d, rows: %d, scale: %d" % (cols, rows, scale))
-    print("tile dims: %d x %d" % (w, h))
-
-    # ascii image is a list of character strings
+    w = W / cols
+    h = w / scale
+    rows = int(H / h)
     aimg = []
-
-    # generate list of dimensions
     for j in range(rows):
-        y1 = int(j*h)
-        y2 = int((j+1)*h)
- 
-        # correct last tile
-        if j == rows-1:
+        y1 = int(j * h)
+        y2 = int((j + 1) * h)
+        if j == rows - 1:
             y2 = H
-
-        # append an empty string
         aimg.append("")
         for i in range(cols):
-
-            # crop image to tile
-            x1 = int(i*w)
-            x2 = int((i+1)*w)
-
-            # correct last tile
-            if i == cols-1:
+            x1 = int(i * w)
+            x2 = int((i + 1) * w)
+            if i == cols - 1:
                 x2 = W
-
-            # crop image to extract tile
             img = image.crop((x1, y1, x2, y2))
- 
-            # get average luminance
             avg = int(getAverageL(img))
-
-            # look up ascii char
-            if moreLevels:
-                gsval = gscale1[int((avg*(len(gscale1)-1))/255)]
-            else:
-                gsval = gscale2[int((avg*(len(gscale2)-1))/255)]
-
-            # append ascii char to string
+            gsval = gscale[int((avg * (len(gscale) - 1)) / 255)]
             aimg[j] += gsval
-
-    # return txt image
     return aimg
 
-# main() function streamlit
 def main():
-
-    # create parser
     descStr = "This program converts an image into ASCII art."
-
     st.title(descStr)
     st.markdown("-- RockingManny")
 
-    imgFile = st.file_uploader("Choose a photo: ",type="jpg")
+    imgFile = st.file_uploader("Choose a photo: ", type="jpg")
 
     if imgFile is not None:
-        morelevels = False
-        scale = 0.5
-        cols = 500
+        image = Image.open(imgFile).convert('L')
+        img_array = np.array(image)
 
-        scale = (float)(st.sidebar.slider("image scale", 0.01,1.00,0.01))
-        cols = (int)(st.sidebar.slider("cols", 1,1080,1))
-        morelevels = st.sidebar.checkbox('More Levels?')
+        # Sidebar controls
+        scale = float(st.sidebar.slider("image scale", 0.01, 1.00, 0.01))
+        cols = int(st.sidebar.slider("cols", 1, 1080, 1))
+        moreLevels = st.sidebar.checkbox('More Levels?', value=False)
+        selected_filters = st.sidebar.multiselect('Select Filters in Order', list(filter_functions.keys()), default=[])
+        scale_options = list(custom_scales.keys()) + ['Custom']
+        selected_scale = st.sidebar.selectbox('Select ASCII Scale', scale_options, index=1)
+        custom_scale = st.sidebar.text_input('Custom ASCII Scale (if Custom selected)', value='' if selected_scale != 'Custom' else '@#*+=-:,. ')
+        invert_image = st.sidebar.checkbox('Invert Image?', value=True)
+        invert_scale = st.sidebar.checkbox('Invert ASCII Scale?', value=False)
 
-        print('generating ASCII art...')
-        # convert image to ascii txt
-        aimg = covertImageToAscii(imgFile, cols, scale, morelevels)
-        
-        with st.container():
+        # Apply filters and collect intermediate results
+        intermediate_arrays = [img_array]
+        current_img = img_array
+        for filter_name in selected_filters:
+            filter_func = filter_functions[filter_name]
+            current_img = filter_func(current_img)
+            intermediate_arrays.append(current_img)
+
+        # Display filter outputs side by side
+        st.subheader("Filter Pipeline Outputs")
+        captions = ['Original'] + selected_filters
+        st.image(intermediate_arrays, caption=captions, width=150)
+
+        # ASCII art conversion button
+        if st.button("Convert to ASCII Art"):
+            final_img_array = intermediate_arrays[-1] if selected_filters else img_array
+            if invert_image:
+                final_img_array = 255 - final_img_array
+            final_img_array_inverted = 255 - final_img_array
+            final_image = Image.fromarray(final_img_array_inverted)
+            aimg = image_to_ascii(final_image, cols, scale, selected_scale, custom_scale, invert_scale)
             
-            zoom_level = st.sidebar.slider("Zoom", 0.01, 1.0, 0.01)
-            content = '<br>'.join([str(row) for row in aimg])
-            division=f"""<div class="zoom">+{content}+</div>"""
-            st.write(f"""
-                <style>
-                .zoom {{
-                    transform: scale({zoom_level});
-                    transform-origin: 0 0;
-                    font-family: 'Consolas', monospace;
-                    color: white;
-                    white-space: pre;
-                }}
-                </style>
-                {division}
-            """, unsafe_allow_html=True)
-                
-        print("Image Generated!")
+            with st.container():
+                zoom_level = st.sidebar.slider("Zoom", 0.01, 1.0, 0.01)
+                content = '<br>'.join([str(row) for row in aimg])
+                division = f"""<div class="zoom">{content}</div>"""
+                st.write(f"""
+                    <style>
+                    .zoom {{
+                        transform: scale({zoom_level});
+                        transform-origin: 0 0;
+                        font-family: 'Consolas', monospace;
+                        color: white;
+                        white-space: pre;
+                    }}
+                    </style>
+                    {division}
+                """, unsafe_allow_html=True)
 
-        # set output file
-        outFile = 'Converted Images\out.txt'
- 
-        # open file
-        f = open(outFile, 'w')
-    
-        # write to file
-        for row in aimg:
-            f.write(row + '\n')
-    
-        # cleanup
-        f.close()
-        
-        # Open the output file
-        print("ASCII art written to %s" % outFile)
-        # subprocess.call(["notepad.exe", outFile])
-
+        outFile = 'Converted Images\\out.txt'
+        # Optional: Write to file (retained from original)
+        if selected_filters or not selected_filters:
+            final_img_array = intermediate_arrays[-1] if selected_filters else img_array
+            final_img_array_inverted = 255 - final_img_array
+            final_image = Image.fromarray(final_img_array_inverted)
+            aimg = image_to_ascii(final_image, cols, scale, selected_scale, custom_scale, invert_scale)
+            with st.container():
+            
+                zoom_level = st.sidebar.slider("Zoom", 0.01, 1.0, 0.01)
+                content = '<br>'.join([str(row) for row in aimg])
+                division=f"""<div class="zoom">+{content}+</div>"""
+                st.write(f"""
+                    <style>
+                    .zoom {{
+                        transform: scale({zoom_level});
+                        transform-origin: 0 0;
+                        font-family: 'Consolas', monospace;
+                        color: white;
+                        white-space: pre;
+                    }}
+                    </style>
+                    {division}
+                """, unsafe_allow_html=True)
+                    
+            # print("Image Generated!")
+            with open(outFile, 'w') as f:
+                for row in aimg:
+                    f.write(row + '\n')
+            # print("ASCII art written to %s" % outFile)
     else:
         st.warning("Please choose a file to upload")
 
-# call main
 if __name__ == '__main__':
     main()
