@@ -1,7 +1,6 @@
 import numpy as np
 from PIL import Image
 import streamlit as st
-import matplotlib.pyplot as plt
 from scipy import fftpack
 
 # Gray scale level values
@@ -148,41 +147,69 @@ def main():
         image = Image.open(imgFile).convert('L')
         img_array = np.array(image)
 
-        # Sidebar controls
-        scale = float(st.sidebar.slider("image scale", 0.01, 1.00, 0.01))
-        cols = int(st.sidebar.slider("cols", 1, 1080, 1))
+        # Sidebar controls for ASCII settings
+        scale = float(st.sidebar.slider("Image Scale", 0.01, 1.00, 0.01))
+        cols = int(st.sidebar.slider("Columns", 1, 1080, 1))
         moreLevels = st.sidebar.checkbox('More Levels?', value=False)
-        selected_filters = st.sidebar.multiselect('Select Filters in Order', list(filter_functions.keys()), default=[])
+        zoom_level = st.sidebar.slider("Zoom", 0.01, 1.0, 0.01)
         scale_options = list(custom_scales.keys()) + ['Custom']
         selected_scale = st.sidebar.selectbox('Select ASCII Scale', scale_options, index=1)
-        custom_scale = st.sidebar.text_input('Custom ASCII Scale (if Custom selected)', value='' if selected_scale != 'Custom' else '@#*+=-:,. ')
+        default_scale_value = custom_scales.get(selected_scale, '@#*+=-:,. ') if selected_scale != 'Custom' else '@#*+=-:,. '
+        custom_scale = st.sidebar.text_input('Custom ASCII Scale', value=default_scale_value)
         invert_image = st.sidebar.checkbox('Invert Image?', value=True)
         invert_scale = st.sidebar.checkbox('Invert ASCII Scale?', value=False)
 
-        # Apply filters and collect intermediate results
-        intermediate_arrays = [img_array]
-        current_img = img_array
-        for filter_name in selected_filters:
-            filter_func = filter_functions[filter_name]
-            current_img = filter_func(current_img)
+        # Custom Filter Pipeline GUI
+        st.sidebar.subheader("Filter Pipeline")
+        num_stages = st.sidebar.slider("Number of Stages", 1, 5, 1)
+        pipeline = []
+        for stage in range(num_stages):
+            st.sidebar.subheader(f"Stage {stage+1}")
+            filters = st.sidebar.multiselect(
+                f"Select filters for stage {stage+1} (applied in parallel)",
+                list(filter_functions.keys()),
+                key=f"filters_stage_{stage}"
+            )
+            merge_method = st.sidebar.selectbox(
+                f"Merge method for stage {stage+1}",
+                ['average', 'max', 'min'],
+                key=f"merge_stage_{stage}"
+            )
+            pipeline.append({'filters': filters, 'merge_method': merge_method})
+
+        # Process the image through the pipeline
+        original_img = img_array
+        intermediate_arrays = [original_img]
+        current_img = original_img
+        for stage_idx, stage in enumerate(pipeline):
+            if stage['filters']:
+                # Apply filters in parallel to the current image
+                filtered_images = [filter_functions[f](current_img) for f in stage['filters']]
+                if filtered_images:
+                    # Merge the parallel filter outputs
+                    if stage['merge_method'] == 'average':
+                        current_img = np.mean(np.stack(filtered_images, axis=0), axis=0).astype(np.uint8)
+                    elif stage['merge_method'] == 'max':
+                        current_img = np.max(np.stack(filtered_images, axis=0), axis=0).astype(np.uint8)
+                    elif stage['merge_method'] == 'min':
+                        current_img = np.min(np.stack(filtered_images, axis=0), axis=0).astype(np.uint8)
+            # Append the result after each stage, even if no filters are applied
             intermediate_arrays.append(current_img)
 
-        # Display filter outputs side by side
+        # Display intermediate results
         st.subheader("Filter Pipeline Outputs")
-        captions = ['Original'] + selected_filters
+        captions = ['Original'] + [f"After Stage {i+1}" for i in range(num_stages)]
         st.image(intermediate_arrays, caption=captions, width=150)
 
-        # ASCII art conversion button
+        # ASCII art conversion
         if st.button("Convert to ASCII Art"):
-            final_img_array = intermediate_arrays[-1] if selected_filters else img_array
+            final_img_array = intermediate_arrays[-1]
             if invert_image:
                 final_img_array = 255 - final_img_array
-            final_img_array_inverted = 255 - final_img_array
-            final_image = Image.fromarray(final_img_array_inverted)
+            final_image = Image.fromarray(final_img_array)
             aimg = image_to_ascii(final_image, cols, scale, selected_scale, custom_scale, invert_scale)
             
             with st.container():
-                zoom_level = st.sidebar.slider("Zoom", 0.01, 1.0, 0.01)
                 content = '<br>'.join([str(row) for row in aimg])
                 division = f"""<div class="zoom">{content}</div>"""
                 st.write(f"""
@@ -198,36 +225,17 @@ def main():
                     {division}
                 """, unsafe_allow_html=True)
 
-        outFile = 'Converted Images\\out.txt'
-        # Optional: Write to file (retained from original)
-        if selected_filters or not selected_filters:
-            final_img_array = intermediate_arrays[-1] if selected_filters else img_array
-            final_img_array_inverted = 255 - final_img_array
-            final_image = Image.fromarray(final_img_array_inverted)
+            # Optional: Write to file
+            outFile = 'Converted Images/out.txt'
+            final_img_array = intermediate_arrays[-1]
+            if invert_image:
+                final_img_array = 255 - final_img_array
+            final_image = Image.fromarray(final_img_array)
             aimg = image_to_ascii(final_image, cols, scale, selected_scale, custom_scale, invert_scale)
-            with st.container():
-            
-                zoom_level = st.sidebar.slider("Zoom", 0.01, 1.0, 0.01)
-                content = '<br>'.join([str(row) for row in aimg])
-                division=f"""<div class="zoom">+{content}+</div>"""
-                st.write(f"""
-                    <style>
-                    .zoom {{
-                        transform: scale({zoom_level});
-                        transform-origin: 0 0;
-                        font-family: 'Consolas', monospace;
-                        color: white;
-                        white-space: pre;
-                    }}
-                    </style>
-                    {division}
-                """, unsafe_allow_html=True)
-                    
-            # print("Image Generated!")
             with open(outFile, 'w') as f:
                 for row in aimg:
                     f.write(row + '\n')
-            # print("ASCII art written to %s" % outFile)
+            print("ASCII art written to %s" % outFile)
     else:
         st.warning("Please choose a file to upload")
 
