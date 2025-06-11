@@ -97,6 +97,71 @@ def butterworth_filter(image, cutoff=30, order=2):
     img_back = (img_back / img_back.max()) * 255
     return img_back.astype(np.uint8)
 
+def prewitt_filter(image):
+    Kx = np.array([[-1, 0, 1], [-1, 0, 1], [-1, 0, 1]])
+    Ky = np.array([[-1, -1, -1], [0, 0, 0], [1, 1, 1]])
+    Ix = np.zeros_like(image, dtype=float)
+    Iy = np.zeros_like(image, dtype=float)
+    pad = 1
+    padded_img = np.pad(image, pad, mode='edge')
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            region = padded_img[i:i+3, j:j+3]
+            Ix[i, j] = np.sum(Kx * region)
+            Iy[i, j] = np.sum(Ky * region)
+    G = np.hypot(Ix, Iy)
+    G = (G / G.max()) * 255
+    return G.astype(np.uint8)
+
+def robert_filter(image):
+    Kx = np.array([[1, 0], [0, -1]])
+    Ky = np.array([[0, 1], [-1, 0]])
+    Ix = np.zeros_like(image, dtype=float)
+    Iy = np.zeros_like(image, dtype=float)
+    pad = 1
+    padded_img = np.pad(image, pad, mode='edge')
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            region = padded_img[i:i+2, j:j+2]
+            Ix[i, j] = np.sum(Kx * region)
+            Iy[i, j] = np.sum(Ky * region)
+    G = np.hypot(Ix, Iy)
+    G = (G / G.max()) * 255
+    return G.astype(np.uint8)
+
+def laplacian_filter(image):
+    K = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]])
+    filtered_img = np.zeros_like(image, dtype=float)
+    pad = 1
+    padded_img = np.pad(image, pad, mode='edge')
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            region = padded_img[i:i+3, j:j+3]
+            filtered_img[i, j] = np.sum(K * region)
+    filtered_img = np.abs(filtered_img)
+    filtered_img = (filtered_img / filtered_img.max()) * 255
+    return filtered_img.astype(np.uint8)
+
+def log_kernel(size, sigma):
+    ax = np.linspace(-(size // 2), size // 2, size)
+    xx, yy = np.meshgrid(ax, ax)
+    kernel = (xx**2 + yy**2 - 2*sigma**2) / (sigma**4) * np.exp(-(xx**2 + yy**2)/(2*sigma**2))
+    kernel = kernel / np.sum(np.abs(kernel))  # Normalize
+    return kernel
+
+def mexican_hat_filter(image, kernel_size=5, sigma=1.0):
+    kernel = log_kernel(kernel_size, sigma)
+    pad = kernel_size // 2
+    padded_img = np.pad(image, pad, mode='edge')
+    filtered_img = np.zeros_like(image, dtype=float)
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            region = padded_img[i:i+kernel_size, j:j+kernel_size]
+            filtered_img[i, j] = np.sum(region * kernel)
+    filtered_img = np.abs(filtered_img)
+    filtered_img = (filtered_img / filtered_img.max()) * 255
+    return filtered_img.astype(np.uint8)
+
 # Dictionary of filters
 filter_functions = {
     'mean': mean_filter,
@@ -104,7 +169,11 @@ filter_functions = {
     'max': max_filter,
     'sobel': sobel_filter,
     'gaussian': gaussian_filter,
-    'butterworth': butterworth_filter
+    'butterworth': butterworth_filter,
+    'prewitt': prewitt_filter,
+    'robert': robert_filter,
+    'laplacian': laplacian_filter,
+    'mexican_hat': mexican_hat_filter,
 }
 
 def image_to_ascii(image, cols, scale, selected_scale, custom_scale, invert_scale):
@@ -182,10 +251,18 @@ def main():
         intermediate_arrays = [original_img]
         current_img = original_img
         for stage_idx, stage in enumerate(pipeline):
+            st.subheader(f"Stage {stage_idx+1} Individual Filter Outputs")
+            filtered_images = []
+            filter_names = []
             if stage['filters']:
                 # Apply filters in parallel to the current image
-                filtered_images = [filter_functions[f](current_img) for f in stage['filters']]
+                for f in stage['filters']:
+                    filtered_img = filter_functions[f](current_img)
+                    filtered_images.append(filtered_img)
+                    filter_names.append(f)
+                # Display individual filter outputs
                 if filtered_images:
+                    st.image(filtered_images, caption=[f"Filter: {name}" for name in filter_names], width=150)
                     # Merge the parallel filter outputs
                     if stage['merge_method'] == 'average':
                         current_img = np.mean(np.stack(filtered_images, axis=0), axis=0).astype(np.uint8)
@@ -193,11 +270,15 @@ def main():
                         current_img = np.max(np.stack(filtered_images, axis=0), axis=0).astype(np.uint8)
                     elif stage['merge_method'] == 'min':
                         current_img = np.min(np.stack(filtered_images, axis=0), axis=0).astype(np.uint8)
-            # Append the result after each stage, even if no filters are applied
+            # else:
+            #     st.write("No filters applied in this stage.")
             intermediate_arrays.append(current_img)
+            # Display the result of the current stage
+            st.subheader(f"After Stage {stage_idx+1}")
+            st.image(current_img, caption=f"After Stage {stage_idx+1}", width=150)
 
-        # Display intermediate results
-        st.subheader("Filter Pipeline Outputs")
+        # Display stage results
+        st.subheader("Filter Pipeline Stage Results")
         captions = ['Original'] + [f"After Stage {i+1}" for i in range(num_stages)]
         st.image(intermediate_arrays, caption=captions, width=150)
 
